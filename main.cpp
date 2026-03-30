@@ -1,5 +1,6 @@
+#include "queue.hpp"
+
 #include <atomic>
-#include <cstddef>
 #include <cstring>
 #include <ctime>
 #include <endian.h>
@@ -21,7 +22,7 @@ long long shitty_fibonacci(int i) {
 std::atomic_bool running(true);
 // just to nuke the cpu
 void noise_loop() {
-  //   static volatile long long a; // hopefully this isn't optimized away
+  static volatile long long a; // hopefully this isn't optimized away
   while (running.load(std::memory_order_relaxed)) {
     auto a = shitty_fibonacci(40);
   }
@@ -119,7 +120,6 @@ int main(int argc, char *argv[]) {
   for (int i = 0; i < num_threads; ++i) {
     noise_threads[i].join();
   }
-
 
   return 0;
 }
