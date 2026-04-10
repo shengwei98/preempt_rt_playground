@@ -1,7 +1,12 @@
 #pragma once
 
+#include <cstring>
+#include <iostream>
 #include <optional>
 #include <pthread.h>
+#include <sys/mman.h>
+#include <tuple>
+#include <type_traits>
 
 namespace rt {
 struct Settings {
@@ -10,6 +15,26 @@ struct Settings {
   std::optional<int> core{std::nullopt};
 };
 
+template <typename Callable, typename... Args> struct ThreadPayload {
+  Callable callable_;
+  std::tuple<Args...> args_;
+
+  ThreadPayload(Callable &&fn, Args &&...args)
+      : callable_(fn), args_(args...) {}
+
+  void invoke() { std::apply(callable_, args_); } // this calls the function
+};
+
+template <typename Callable, typename... Args>
+void *pthread_fn(void *payload) { // this takes ownership of the payload
+  auto *thread_payload =
+      static_cast<ThreadPayload<Callable, Args...> *>(payload);
+  thread_payload->invoke();
+  delete thread_payload;
+  return nullptr;
+}
+
+// joining thread
 class Thread {
 public:
   Thread() : joinable_(false) {}
@@ -33,6 +58,11 @@ public:
     pthread_attr_init(&attr);
 
     if (settings.fifo) {
+      if (mlockall(MCL_CURRENT | MCL_FUTURE) == -1) {
+        std::cerr << "Failed to lock memory: " << std::strerror(errno)
+                  << std::endl;
+        // just ignore for now
+      }
       pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED);
       pthread_attr_setschedpolicy(&attr, SCHED_FIFO);
 
@@ -50,24 +80,35 @@ public:
       }
     }
 
-    int res = pthread_create(&thread_, nullptr, thread_fn, args...);
+    auto *payload = new ThreadPayload<Callable, Args...>(
+        std::decay_t<Callable>(thread_fn), std::decay_t<Args>(args)...);
+
+    int res = pthread_create(&thread_, nullptr, &pthread_fn<std::decay_t<Callable>,
+                                                             std::decay_t<Args>...>,
+                             payload);
+
+    joinable_ = true;
   }
 
   ~Thread() {
     if (joinable()) {
+      // pthread_detach(thread_);
       join();
     }
   }
   bool joinable() { return joinable_; }
 
   void join() {
-    pthread_join(thread_, nullptr);
-    joinable_ = false;
+    if (joinable_) {
+      pthread_join(thread_, nullptr);
+      joinable_ = false;
+    }
   }
 
 private:
-  bool joinable_{true};
-  pthread_t thread_;
+  bool joinable_{false};
+
+  pthread_t thread_{}; // this is just an id so can be default initialized.
 };
 
 } // namespace rt

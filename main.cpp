@@ -1,6 +1,9 @@
-#include "queue.hpp"
+#include "publisher.hpp"
+// #include "queue.hpp"
+#include "thread.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <ctime>
 #include <endian.h>
@@ -68,58 +71,20 @@ int main(int argc, char *argv[]) {
   std::cout << "Starting measurement (" << (use_fifo ? "SCHED_FIFO" : "Normal")
             << ") \n";
 
-  if (mlockall(MCL_CURRENT | MCL_FUTURE) == -1) {
-    std::cerr << "Failed to lock memory: " << std::strerror(errno) << std::endl;
-    return 1;
-  }
-
-  pthread_attr_t attr;
-  pthread_attr_init(&attr);
-  if (use_fifo) {
-
-    // disable inheritance (idk if this is necessary )
-    pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED);
-
-    // set policy to FIFO
-    pthread_attr_setschedpolicy(&attr, SCHED_FIFO);
-
-    // set prio to max
-    struct sched_param param;
-    param.sched_priority = sched_get_priority_max(SCHED_FIFO);
-    pthread_attr_setschedparam(&attr, &param);
-  }
-
-  // pin to core 0
-  cpu_set_t cpuset;
-  CPU_ZERO(&cpuset);   // Clear the cpu set
-  CPU_SET(0, &cpuset); // Add core 0 to the set
-  pthread_attr_setaffinity_np(&attr, sizeof(cpu_set_t), &cpuset);
-
-  int num_threads = 100; // force some core contention?
-
-  std::cout << "Starting " << num_threads << " noise maker threads\n";
-  std::vector<std::thread> noise_threads(num_threads);
-  for (int i = 0; i < num_threads; ++i) {
-    noise_threads[i] = std::thread(noise_loop);
-  }
-
-  usleep(5000000);
-
-  pthread_t thread;
-  auto res = pthread_create(&thread, &attr, target_thread, nullptr);
-  if (res != 0) {
-    std::cout << " failed to create pthread, error code = "
-              << std::strerror(res) << std::endl;
-    return res;
-  }
-  pthread_attr_destroy(&attr);
-
-  pthread_join(thread, nullptr);
-
-  running.store(false, std::memory_order_relaxed);
-  for (int i = 0; i < num_threads; ++i) {
-    noise_threads[i].join();
-  }
+  lfq::Handle handle;
+  lfq::Subscriber subscriber(handle,
+                             [](int item) { std::cout << item << "\n"; },
+                             {.fifo = use_fifo, .priority = 100, .core = 1});
+  rt::Thread publisher_thread(
+    [&handle]() {
+      lfq::Publisher publisher(handle);
+      int i = 0;
+      while (running.load(std::memory_order_relaxed)) {
+        publisher.Publish(i++);
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+      }
+    },
+    {.fifo = use_fifo, .priority = 100, .core = 0});
 
   return 0;
 }

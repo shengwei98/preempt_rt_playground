@@ -3,7 +3,6 @@
 #include "thread.hpp"
 
 #include <atomic>
-#include <memory>
 
 namespace lfq {
 
@@ -27,7 +26,7 @@ public:
              const rt::Settings &settings = {})
       : handle_(handle), callback_(callback) {
     thread_ = rt::Thread(
-        [this]()  {
+        [this]() {
           while (running_.test(std::memory_order::relaxed)) {
             int item;
             if (handle_.queue.pop(item)) {
@@ -35,7 +34,7 @@ public:
             }
           }
         },
-        settings, nullptr);
+        settings);
   }
 
   ~Subscriber() {
